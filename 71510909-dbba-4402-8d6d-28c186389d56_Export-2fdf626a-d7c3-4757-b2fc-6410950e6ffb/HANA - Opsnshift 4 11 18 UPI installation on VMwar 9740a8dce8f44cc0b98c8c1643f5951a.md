@@ -1,0 +1,1723 @@
+# HANA - Opsnshift 4.11.18 UPI installation on VMware vSphere(like BareMetal) - bak
+
+---
+
+> 오픈시프트 설치 버전 : 4.11.18
+설치 방식 : UPI(User Provisioned Infrastructure)
+> 
+
+---
+
+- 목차
+
+---
+
+# 사전 환경 설정
+
+## 1. 새 분산 포트 그룹 생성(Disconnected OCP용)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled.png)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%201.png)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%202.png)
+
+※ VLAN 생성시 VLAN 유형 설정(OCP 설치 후 네트워크 변경 불가)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%203.png)
+
+---
+
+# 파일 준비
+
+## 2. silo(저장소) 설정
+
+<aside>
+💡 [hostname]
+silo
+[IP]
+ens192(DP_10_50_3) : 10.50.3.155 - terminal, download, ext
+# 외부 접속용
+ens224(DP_for_hanabank) : 10.229.111.30 - upload, int
+# 노드 업로드용(for bastion)
+[etc]
+SELinux & firewalld disabled / local repository / LVM(datavg-quaylv)
+
+</aside>
+
+### 2-1. 최신 RHEL 8.6 REPOSITORY 파일 준비
+
+```bash
+subscription-manager register
+---
+Registering to: subscription.rhsm.redhat.com:443/subscription
+Username: [hwcho@metanet.co.kr]
+Password: [comas123]
+---
+subscription-manager list --available
+subscription-manager attach --pool 8a85f99c7ebb2fb6017ebf86448642b3
+subscription-manager repos --list
+subscription-manager release --set=8.6 && rm -rf /var/cache/dnf
+
+yum install yum-utils createrepo -y
+
+mkdir sh
+cd sh
+echo "mkdir -p /data/repo/
+reposync --gpgcheck --newest-only --repoid=rhel-8-for-x86_64-baseos-rpms  --download-path=/data/repo/ --downloadcomps --download-metadata
+reposync --gpgcheck --newest-only --repoid=rhel-8-for-x86_64-appstream-rpms --download-path=/data/repo/ --downloadcomps --download-metadata
+reposync --gpgcheck --newest-only --repoid=rhocp-4.11-for-rhel-8-x86_64-rpms --download-path=/data/repo/ --downloadcomps --download-metadata
+reposync --gpgcheck --newest-only --repoid=fast-datapath-for-rhel-8-x86_64-rpms --download-path=/data/repo/ --downloadcomps --download-metadata
+createrepo /data/repo/rhel-8-for-x86_64-baseos-rpms/ -g comps.xml
+createrepo /data/repo/rhel-8-for-x86_64-appstream-rpms/ -g comps.xml
+createrepo /data/repo/rhocp-4.11-for-rhel-8-x86_64-rpms / -g comps.xml
+createrepo /data/repo/fast-datapath-for-rhel-8-x86_64-rpms/ -g comps.xml" > "repo_down.sh"
+
+sh -x 01.repo_down.sh
+```
+
+## 3. RHOCP 설치시 필요한 파일 외부 다운로드(4.11.18 기준)
+
+<aside>
+💡 oc(OpenShift CLI) 명령어
+openshift-install 명령어
+oc-mirror 플러그인
+rhcos(Red Hat CoreOS) iso(BareMetal) 파일
+
+</aside>
+
+### 3-1. oc(OpenShift CLI) 명령어
+
+```bash
+mkdir -p /data/ocp41118/
+# ocp 4.11.18용 다운로드 디렉터리 생성
+cd /data/ocp41118/
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/openshift-client-linux-4.11.18.tar.gz -o openshift-client-linux-4.11.18.tar.gz
+# oc 명령어 4.11.18 버전 다운로드 (https://console.redhat.com/openshift/downloads)
+tar xvf openshift-client-linux-4.11.18.tar.gz -C /usr/local/sbin/
+# 외부 명령어 풀기
+```
+
+### 3-2. openshift-install 명령어
+
+```bash
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/openshift-install-linux-4.11.18.tar.gz -o openshift-install-linux-4.11.18.tar.gz
+# openshift-install 4.11.18 버전 다운로드 (https://console.redhat.com/openshift/downloads)
+tar xvf openshift-install-linux-4.11.18.tar.gz -C /usr/local/sbin/
+# 외부 명령어 풀기
+```
+
+### 3-3. oc-mirror plug-in 설치
+
+```bash
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/oc-mirror.tar.gz -o oc-mirror.tar.gz
+# oc-mirror 4.11.18 버전 다운로드
+tar xvf oc-mirror.tar.gz -C /usr/local/sbin/
+# 외부 명령어 풀기
+chmod +x /usr/local/sbin/oc-mirror
+# oc mirror 실행 권한 주기
+oc mirror help
+# 실행 확인
+```
+
+※  반드시 미러링 할 이미지와 버전이 같은 openshift-install 다운로드
+
+### 3-4. rhcos iso 파일 다운로드
+
+```bash
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.11/latest/rhcos-4.11.9-x86_64-live.x86_64.iso -o rhcos-4.11.9-x86_64-live.x86_64.iso
+# rhcos 4.11 중 최신 iso 파일 다운로드 (2023/01월 기준 4.11.9)
+```
+
+※  CoreOS는 모든 릴리즈에 변경되지 않으므로, OCP 버전보다 같거나 낮은 버전 중 가장 높은 버전(필수는 아님)을 다운로드해야 한다.
+
+### 3-4-1. rhcos iso 파일 업로드
+
+LOCAL PC에 다운로드
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%204.png)
+
+ESXi 호스트 직접 접속(http://172.16.41.31) - ex) ESXi
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%205.png)
+
+ID/PW 입력(root/VMware1!)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%206.png)
+
+ESXi 호스트 Datastore iso 파일 업로드
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%207.png)
+
+### 3-5. 설치 필요 파일 통합 다운로드
+
+```bash
+echo "mkdir -p /data/ocp41118/
+cd /data/ocp41118/
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/openshift-client-linux-4.11.18.tar.gz -o openshift-client-linux-4.11.18.tar.gz
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/openshift-install-linux-4.11.18.tar.gz -o openshift-install-linux-4.11.18.tar.gz
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.11.18/oc-mirror.tar.gz -o oc-mirror.tar.gz
+curl -L https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.11/latest/rhcos-4.11.9-x86_64-live.x86_64.iso -o rhcos-4.11.9-x86_64-live.x86_64.iso
+tar xvf openshift-client-linux-4.11.18.tar.gz -C /usr/local/sbin/
+tar xvf openshift-install-linux-4.11.18.tar.gz -C /usr/local/sbin/
+tar xvf oc-mirror.tar.gz -C /usr/local/sbin/
+chmod +x /usr/local/sbin/oc-mirror
+cd /root/sh/" > "02.ocp_cmd_down.sh"
+
+sh -x 02.ocp_cmd_down.sh
+```
+
+---
+
+# 레지스트리 미러
+
+## 4. mirror-registry 구축
+
+### 4-1. mirror-registry 설치
+
+```bash
+yum install podman -y
+# podman 설치
+
+mv /root/sh
+
+echo "mkdir -p /data/oc-img/
+cd /data/oc-img/
+curl -L https://developers.redhat.com/content-gateway/rest/mirror/pub/openshift-v4/clients/mirror-registry/latest/mirror-registry.tar.gz -o mirror-registry.tar.gz
+tar xvf mirror-registry.tar.gz
+mv mirror-registry.tar.gz /data/ocp41118/
+echo '127.0.0.1 registry.ocpcsm.hanabank.com' >> /etc/hosts
+# 내부 dns는 외부 주소로 쿼리가 되지 않아 일시적으로 설정(임시 환경이기에 아무 호스트네임 사용 가능 --quayHostname과 동일)
+./mirror-registry install --initUser admin --initPassword admin123 --quayHostname registry.ocpcsm.hanabank.com --quayRoot /quay
+# quay 설치" > "03.quay_install.sh"
+
+sh -x 03.quay_install.sh
+```
+
+설치가 성공하면 마지막에 ID, PW 출력
+
+```bash
+INFO[2023-01-13 15:34:48] Quay installed successfully, permanent data is stored in /quay 
+INFO[2023-01-13 15:34:48] Quay is available at https://registry.ocpcsm.hanabank.com:8443 with credentials (admin, admin123)
+```
+
+podman 확인
+
+```bash
+CONTAINER ID  IMAGE                                                    COMMAND         CREATED             STATUS                 PORTS                   NAMES
+d34bd391ce50  registry.access.redhat.com/ubi8/pause:8.6-21             infinity        2 minutes ago       Up 2 minutes ago       0.0.0.0:8443->8443/tcp  503cb0cbe0a0-infra
+1d3f5b0ed478  registry.redhat.io/rhel8/postgresql-10:1-202.1666660384  run-postgresql  2 minutes ago       Up 2 minutes ago       0.0.0.0:8443->8443/tcp  quay-postgres
+802a914a229c  registry.redhat.io/rhel8/redis-6:1-88.1666660352         run-redis       2 minutes ago       Up 2 minutes ago       0.0.0.0:8443->8443/tcp  quay-redis
+109bd1c86e65  registry.redhat.io/quay/quay-rhel8:v3.7.10               registry        About a minute ago  Up About a minute ago  0.0.0.0:8443->8443/tcp  quay-app
+```
+
+### 4-1-1. mirror-registry 설치 실패 시 삭제 방법
+
+```bash
+./mirror-registry uninstall -v --quayRoot /quay
+```
+
+### 4-2. quay 접속 테스트
+
+```bash
+podman login --authfile test.txt -u admin -p admin123 registry.ocpcsm.hanabank.com:8443 --tls-verify=false
+```
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%208.png)
+
+인증서 등록
+
+```bash
+cp /quay/quay-rootCA/rootCA.pem /usr/share/pki/ca-trust-source/anchors/
+update-ca-trust
+```
+
+### 4-3. Credential 구성
+
+[https://console.redhat.com/openshift/install/pull-secret](https://console.redhat.com/openshift/install/pull-secret) 왼쪽의 링크 들어가서 pull secret을 복사하여 pull_secret파일에 저장
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%209.png)
+
+```bash
+yum install jq -y
+# jq 설치
+cat pull_secret | jq . > pull_secret2
+echo -n 'admin:admin123' | base64 -w0
+# ID, PW 변경
+---
+YWRtaW46YWRtaW4xMjM=
+---
+# 출력값(test.txt)
+```
+
+<credentials>을 base64로 인코딩된 값으로 수정 후 pull_secret2에 추가.
+
+```bash
+"auths": {
+    "<mirror_registry>": { 
+      "auth": "<credentials>", 
+      "email": "you@example.com"
+  },
+```
+
+완성값 예시
+
+```bash
+{
+  "auths": {
+    "cloud.openshift.com": {
+      "auth": "b3BlbnNoaWZ0LXJlbGVhc2UtZGV2K29jbV9hY2Nlc3NfZDc5NDNmM2I4ZTEyNGIwNWI0NGY1Nzk1Y2U4MjFkZWM6RFk0VEtPR1oxWjZPMlk4UVJZUTREOVgyMjE1WkY4OEswTUVWVkFZVVAxSUdONkZPQ0ZYWlc1M09JSDdaWDRUTQ==",
+      "email": "hwcho@metanet.co.kr"
+# disconnect -> 삭제하기
+    },
+    "quay.io": {
+      "auth": "b3BlbnNoaWZ0LXJlbGVhc2UtZGV2K29jbV9hY2Nlc3NfZDc5NDNmM2I4ZTEyNGIwNWI0NGY1Nzk1Y2U4MjFkZWM6RFk0VEtPR1oxWjZPMlk4UVJZUTREOVgyMjE1WkY4OEswTUVWVkFZVVAxSUdONkZPQ0ZYWlc1M09JSDdaWDRUTQ==",
+      "email": "hwcho@metanet.co.kr"
+    },
+    "registry.connect.redhat.com": {
+      "auth": "fHVoYy1wb29sLTIzMWFiZDE1LTI4NDMtNGM0Mi04ZGRmLWQxZWIzZGFmZWE3MzpleUpoYkdjaU9pSlNVelV4TWlKOS5leUp6ZFdJaU9pSm1NV0ptTmpnNU1qbGhNVGcwTUdRMVlUTXhNbUk1T1dWbE5HSTRaVGt6TWlKOS5Dc21adXMzQjIzbklGTVZuSmZWSWJtWkFGUllRaWRmNzVHalV2azZWdHZvX0dFSHhsdTRrbmZaV1poRV9oOURDd21sWnNSMENrdlhXNU15RVV2bUpLZldpenFtbExlcHFULW1qUjZfejlxQ2Y4aFc0YXBuNmk2X3I4YXRURHh2NFVWQU5mNzFjRlZ0dnFuS0ppdVI3eC1yYmp0ZlZOS2wycE52cUlsU2NFaVdNeGgxejJKN2hVeUZ3VkRidm0yVjJNa0YtN3FPRVE5M0tjMll0SmN0NW9tZnBmU1ZEUWEteF8xd1kyNTNnbjlscE1hUElKQTBZZC1tZ2s5U3VYZ0l0U0lpRFJGNnR5V2c5amlMMFJ6MzVkQ2ZpeWVsTEpuZkstaUlwbEFBV0tzZnk2SUZscFkyamk5SVVWSFVYb0VaakdzVm9HM2YtRTUtOHRaLTZ5UnhnUjRXajgtWnZaR1Q3bUxFODBYdWRkNUliejBtYS1XZWZrUlRmcl81NklyelBPSzR5RkFzVnFrbWRwRzZWQmZpNzdhTGhwRW1JcVhkOTBITjhxM0tHZUctX1BDc011VUhPdnh2eVhkUlJQVXVER0Q3ZUh1WWNheW1TeF8tTF9Nc2hqdERHdkRkZVNfZW5RXzA3cU5NMEdJSXhlNDV6YjhtRWt0V3FVN2YzcFFmSUFIZ2pteW9jLWhXMEJDSHJLcThVTnN1LS1Qd1o5Y0UzSHhnNmVZSmdIcXRrQ0t6UkVTSDhwMERkM1FRVDU4cHZCNkZEUnJFLTNPRDZOamV0REJCbFQzakNvN09ha0lRenI5ekJTa1J4dDM4T09nM0lvN2s4b2FTaHVIQkFwR2hSU2tSTnlPaHBaamp0SzVvbHhLWE5lUWg1cXhMOV9aemF6ZXR6ZHZYd3ZvSQ==",
+      "email": "hwcho@metanet.co.kr"
+    },
+    "registry.redhat.io": {
+      "auth": "fHVoYy1wb29sLTIzMWFiZDE1LTI4NDMtNGM0Mi04ZGRmLWQxZWIzZGFmZWE3MzpleUpoYkdjaU9pSlNVelV4TWlKOS5leUp6ZFdJaU9pSm1NV0ptTmpnNU1qbGhNVGcwTUdRMVlUTXhNbUk1T1dWbE5HSTRaVGt6TWlKOS5Dc21adXMzQjIzbklGTVZuSmZWSWJtWkFGUllRaWRmNzVHalV2azZWdHZvX0dFSHhsdTRrbmZaV1poRV9oOURDd21sWnNSMENrdlhXNU15RVV2bUpLZldpenFtbExlcHFULW1qUjZfejlxQ2Y4aFc0YXBuNmk2X3I4YXRURHh2NFVWQU5mNzFjRlZ0dnFuS0ppdVI3eC1yYmp0ZlZOS2wycE52cUlsU2NFaVdNeGgxejJKN2hVeUZ3VkRidm0yVjJNa0YtN3FPRVE5M0tjMll0SmN0NW9tZnBmU1ZEUWEteF8xd1kyNTNnbjlscE1hUElKQTBZZC1tZ2s5U3VYZ0l0U0lpRFJGNnR5V2c5amlMMFJ6MzVkQ2ZpeWVsTEpuZkstaUlwbEFBV0tzZnk2SUZscFkyamk5SVVWSFVYb0VaakdzVm9HM2YtRTUtOHRaLTZ5UnhnUjRXajgtWnZaR1Q3bUxFODBYdWRkNUliejBtYS1XZWZrUlRmcl81NklyelBPSzR5RkFzVnFrbWRwRzZWQmZpNzdhTGhwRW1JcVhkOTBITjhxM0tHZUctX1BDc011VUhPdnh2eVhkUlJQVXVER0Q3ZUh1WWNheW1TeF8tTF9Nc2hqdERHdkRkZVNfZW5RXzA3cU5NMEdJSXhlNDV6YjhtRWt0V3FVN2YzcFFmSUFIZ2pteW9jLWhXMEJDSHJLcThVTnN1LS1Qd1o5Y0UzSHhnNmVZSmdIcXRrQ0t6UkVTSDhwMERkM1FRVDU4cHZCNkZEUnJFLTNPRDZOamV0REJCbFQzakNvN09ha0lRenI5ekJTa1J4dDM4T09nM0lvN2s4b2FTaHVIQkFwR2hSU2tSTnlPaHBaamp0SzVvbHhLWE5lUWg1cXhMOV9aemF6ZXR6ZHZYd3ZvSQ==",
+      "email": "hwcho@metanet.co.kr"
+    },
+    "registry.ocpcsm.hanabank.com:8443": {
+      "auth": "YWRtaW46YWRtaW4xMjM=",
+      "email": "hwcho@metanet.co.kr"
+    }
+  }
+}
+```
+
+json을 다시 한줄로 변경
+
+```bash
+cat pull_secret2 | jq . -c > pull_secret3
+# 확인차 점검
+```
+
+## 5. OCP 설치 이미지 레지스트리 다운로드
+
+### 5-1. imageset-config.yaml 생성
+
+```bash
+mkdir $XDG_RUNTIME_DIR/containers
+cp pull_secret3 $XDG_RUNTIME_DIR/containers/auth.json
+# pull_secret3 복사(pull_secret2여도 무방)
+oc mirror init --registry registry.ocpcsm.hanabank.com:8443/mirror/oc-mirror-metadata > imageset-config.yaml
+# 기본 이미지셋 생성
+```
+
+### 5-2. imageset-config.yaml 확인(기본값)
+
+```bash
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v1alpha2
+storageConfig:
+  registry:
+    imageURL: registry.ocpcsm.hanabank.com:8443/mirror/oc-mirror-metadata
+    skipTLS: false
+mirror:
+  platform:
+    channels:
+    - name: stable-4.11
+      type: ocp
+  operators:
+  - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.12
+    packages:
+    - name: serverless-operator
+      channels:
+      - name: stable
+  additionalImages:
+  - name: registry.redhat.io/ubi8/ubi:latest
+  helm: {}
+```
+
+### 5-2. imageset-config.yaml 수정
+
+```bash
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v1alpha2
+storageConfig:
+  registry:
+    imageURL: registry.ocpcsm.hanabank.com:8443/mirror/oc-mirror-metadata
+    skipTLS: false
+mirror:
+  platform:
+    channels:
+    - name: stable-4.11 # 4.11.의 안정 버전 다운로드
+      minVersion: 4.11.18 # 4.11.18 버전 지정
+      maxVersion: 4.11.18 # 4.11.18 버전 지정
+      type: ocp
+    graph: true
+# operators: 밑부분 삭제 후 graph: 부분 추가
+```
+
+### 5-3. 이미지 세트 디스크로 미러링
+
+```bash
+nohup bash -c '{ time oc mirror --ignore-history --config=/data/ocp41118/imageset-config.yaml file:///quay/mirror/ ; } 2>&1' > /data/ocp41118/mirror.log &
+tail -f mirror.log
+# mirror 로그 실시간 확인
+```
+
+### 5-3-1. 이미지 세트 미러링 실패시(메타데이터 삭제 후 재시도 → mirror_seq1_000000.tar)
+
+QUAY 웹 브라우저 접속
+
+```bash
+https://172.16.43.200:8443
+```
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2010.png)
+
+QUAY 로그인(ID : init PW : JXol2Lxnvb4698skgjG1Z3D0Eh5St7CV)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2011.png)
+
+mirror 그룹 확인
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2012.png)
+
+mirror 그룹 설정 → Begin deletion
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2013.png)
+
+그룹 삭제
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2014.png)
+
+디렉터리 삭제
+
+```bash
+rm -rf /quqy/mirror
+# 다운로드 중이였던 mirror 디렉터리 삭제
+rm -rf /run/user/0/containers
+# 이미지 세트 재생성시 삭제(주기적으로 만료되어 없어짐.)
+```
+
+### 5-4. 이미지 세트 확인
+
+미러링 완료 후 파일 확인
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2015.png)
+
+### 5-5. 사전 준비 파일 압축
+
+```bash
+cd /root/sh/
+
+echo "cd /data/
+tar cvf ocp41118.tar ocp41118/
+tar cvf rhel86_repo.tar repo/
+tar cvf ocp_install_quay.tar /quay/
+cd /root/sh" > "04.ocp_install_zip.sh"
+
+sh -x 04.ocp_install_zip.sh
+```
+
+## 6. bastion 설정
+
+### 6-1. VM 생성
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2016.png)
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2017.png)
+
+### 6-2. Bastion 기본 설치 및 설정
+
+<aside>
+💡 [hostname]
+bastion.ocpcsm.hanabank.com
+[IP]
+ens192(DP_for_hanabank) : 10.229.111.31 - deploy, int
+# 노드 배포용
+[etc]
+SELinux & firewalld disabled
+
+</aside>
+
+네트워크 및 호스트네임 설정
+
+```bash
+nmcli con mod ens192 ipv4.address 10.229.111.31/24 ipv4.gateway 10.229.111.1 ipv4.dns 10.229.111.32,10.229.111.33 ipv4.method manual connection.autoconnect yes
+nmcli con up ens192
+# ens192 포트 설정
+nmcli con show
+# 포트 활성화 확인
+
+hostnamectl set-hostname bastion.ocpcsm.hanabank.com
+bash
+# hostname 설정 및 적용
+```
+
+LVM 설정
+
+```bash
+fdisk /dev/sdb
+---
+Command (m for help): n
+Partition type
+   p   primary (0 primary, 0 extended, 4 free)
+   e   extended (container for logical partitions)
+Select (default p): 
+
+Using default response p.
+Partition number (1-4, default 1): 
+First sector (2048-419430399, default 2048): 
+Last sector, +sectors or +size{K,M,G,T,P} (2048-419430399, default 419430399): 
+
+Created a new partition 1 of type 'Linux' and of size 200 GiB.
+Command (m for help): t
+Selected partition 1
+Hex code (type L to list all codes): 8e
+Changed type of partition 'Linux' to 'Linux LVM'.
+Command (m for help): w
+---
+pvcreate /dev/sdb1
+vgcreate datavg /dev/sdb1
+lvcreate -n quaylv -L +500GiB datavg
+lvcreate -n datalv -l 100%FREE datavg
+mkfs.xfs /dev/mapper/datavg-datalv
+mkfs.xfs /dev/mapper/datavg-quaylv
+mkdir /data
+mkdir /quay
+echo "/dev/mapper/datavg-quaylv /quay                       xfs     defaults        0 0
+/dev/mapper/datavg-datalv /data                       xfs     defaults        0 0" >> "/etc/fstab"
+mount -a
+```
+
+silo에서 사전 준비 파일 가져오기
+
+```bash
+scp -r 10.229.111.30:/data/ocp41118.tar /data/
+scp -r 10.229.111.30:/data/ocp_install_quay.tar /data/
+scp -r 10.229.111.30:/data/rhel86_repo.tar /data/
+```
+
+LOCAL REPOSITOTY 설정
+
+```bash
+tar xvf /data/rhel86_repo.tar -C /
+
+echo "[BaseOS]
+name=RHEL8-BaseOS
+gpgcheck=0
+enabled=1
+metadata_expire=-1
+baseurl=file:///repo/rhel-8-for-x86_64-baseos-rpms/
+
+[AppStream]
+name=RHEL8-AppStream
+gpgcheck=0
+enabled=1
+metadata_expire=-1
+baseurl=file:///repo/rhel-8-for-x86_64-appstream-rpms/
+
+[RHOCP-4.11]
+name=RHEL8-rhocp-4.11
+gpgcheck=0
+enabled=1
+metadata_expire=-1
+baseurl=file:///repo/rhocp-4.11-for-rhel-8-x86_64-rpms/
+
+[DATAPATH]
+name=RHEL8-fast-datapath
+gpgcheck=0
+enabled=1
+metadata_expire=-1
+baseurl=file:///repo/fast-datapath-for-rhel-8-x86_64-rpms/" > "/etc/yum.repos.d/rhocp.repo"
+yum clean all
+yum repolist -v
+```
+
+firewalld, selinux 비활성화
+
+```bash
+systemctl disable firewalld --now
+sed 's/SELINUX=enforcing/SELINUX=disabled/g' -i /etc/selinux/config
+reboot
+```
+
+### 6-3. Bastion 설치 전 구성
+
+오픈시프트 관련 명령어 압축 해제
+
+```bash
+cd /data/
+tar xvf ocp41118.tar
+```
+
+오픈시프트 관련 명령어 등록
+
+```bash
+cd /datas/ocp41118/
+tar xvf openshift-client-linux-4.11.18.tar.gz -C /usr/local/sbin/
+# oc(OpenShift CLI) 명령어 풀기
+tar xvf openshift-install-linux-4.11.18.tar.gz -C /usr/local/sbin/
+# openshift-install 명령어 풀기
+tar xvf oc-mirror.tar.gz -C /usr/local/sbin/
+# oc-mirror plug-in 명령어 풀기
+chown root:root /usr/local/sbin/oc-mirror
+# oc mirror root 소유권 죽주기
+chmod +x /usr/local/sbin/oc-mirror
+# oc mirror 실행 권한 주기
+oc mirror help
+# 실행 확인
+```
+
+오픈시프트 미러 명령어 압축 해제(quay 설치용)
+
+```bash
+mkdir -p /data/oc-img/
+tar xvf /data/ocp41118/mirror-registry.tar.gz -C /data/oc-img/
+```
+
+local quay 설치
+
+```bash
+yum install podman -y
+
+cd /data/oc-img/
+
+echo '127.0.0.1 registry.ocpcsm.hanabank.com' >> /etc/hosts
+./mirror-registry install --initUser admin --initPassword admin123 --quayHostname registry.ocpcsm.hanabank.com --quayRoot /quay
+```
+
+local quay 설치 정보 팝업 확인(스냅샷)
+
+```bash
+INFO[2023-01-16 10:59:25] Quay installed successfully, permanent data is stored in /quay 
+INFO[2023-01-16 10:59:25] Quay is available at https://registry.ocpcsm.hanabank.com:8443 with credentials (admin, admin123)
+```
+
+인증서 등록
+
+```bash
+podman login -u admin -p admin123 registry.ocpcsm.hanabank.com:8443 --tls-verify=false
+# podman login 시 /run/user/0/containers 생성
+cp /quay/quay-rootCA/rootCA.pem /usr/share/pki/ca-trust-source/anchors/
+update-ca-trust
+```
+
+### 6-5. 이미지 세트 푸시
+
+(컨테이너 인증서 등록 - podman login 안할 시)
+
+```bash
+mkdir $XDG_RUNTIME_DIR/containers
+cp pull_secret3 $XDG_RUNTIME_DIR/containers/auth.json
+```
+
+ocp 설치 파일 압축 풀기 및 이동
+
+```bash
+tar xvf /data/ocp_install_quay.tar
+cp ./quay/mirror/mirror_seq1_000000.tar /quay/mirror
+cd /quay/mirror
+# 준비한 ocp 설치 이미지 압축 풀기 및 이동
+
+```
+
+푸시
+
+```bash
+oc mirror --from=/quay/mirror/mirror_seq1_000000.tar docker://registry.ocpcsm.hanabank.com:8443/4.11
+# QUAY에 4.11 디렉터리 생성하면서 이미지 푸시, 명령어 입력한 곳에서 oc-mirror-workspace 디렉터리 생성
+```
+
+푸시 완료 로그
+
+```bash
+info: Mirroring completed in 730ms (28.14MB/s)
+Wrote release signatures to oc-mirror-workspace/results-1673938801
+Writing image mapping to oc-mirror-workspace/results-1673938801/mapping.txt
+Writing UpdateService manifests to oc-mirror-workspace/results-1673938801
+Writing ICSP manifests to oc-mirror-workspace/results-1673938801
+```
+
+## 7. HAproxy 구축
+
+### 7-1. haproxy 설치
+
+```bash
+yum install haproxy -y
+```
+
+### 7-2. ****haproxy.cfg**** 수정
+
+```bash
+#---------------------------------------------------------------------
+# Example configuration for a possible web application.  See the
+# full configuration options online.
+#
+#   https://www.haproxy.org/download/1.8/doc/configuration.txt
+#
+#---------------------------------------------------------------------
+
+#---------------------------------------------------------------------
+# Global settings
+#---------------------------------------------------------------------
+global
+    # to have these messages end up in /var/log/haproxy.log you will
+    # need to:
+    #
+    # 1) configure syslog to accept network log events.  This is done
+    #    by adding the '-r' option to the SYSLOGD_OPTIONS in
+    #    /etc/sysconfig/syslog
+    #
+    # 2) configure local2 events to go to the /var/log/haproxy.log
+    #   file. A line like the following can be added to
+    #   /etc/sysconfig/syslog
+    #
+    #    local2.*                       /var/log/haproxy.log
+    #
+    log         127.0.0.1 local2
+
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+
+    # turn on stats unix socket
+    stats socket /var/lib/haproxy/stats
+
+    # utilize system-wide crypto-policies
+    ssl-default-bind-ciphers PROFILE=SYSTEM
+    ssl-default-server-ciphers PROFILE=SYSTEM
+
+#---------------------------------------------------------------------
+# common defaults that all the 'listen' and 'backend' sections will
+# use if not designated in their block
+#---------------------------------------------------------------------
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option http-server-close
+    option forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 3000
+
+#---------------------------------------------------------------------
+# main frontend which proxys to the backends
+#---------------------------------------------------------------------
+#frontend main
+#    bind *:5000
+#    acl url_static       path_beg       -i /static /images /javascript /stylesheets
+#    acl url_static       path_end       -i .jpg .gif .png .css .js
+
+#    use_backend static          if url_static
+#    default_backend             app
+
+#---------------------------------------------------------------------
+# static backend for serving up images, stylesheets and such
+#---------------------------------------------------------------------
+#backend static
+#    balance     roundrobin
+#    server      static 127.0.0.1:4331 check
+#
+#---------------------------------------------------------------------
+# round robin balancing between the various backends
+#---------------------------------------------------------------------
+
+frontend openshift-api-server
+    bind *:6443
+    default_backend openshift-api-server
+    mode tcp
+    option tcplog
+
+backend openshift-api-server
+    balance source
+    mode tcp
+    server bootstrap 10.229.111.64:6443 check
+    server master01 10.229.111.51:6443 check
+    server master02 10.229.111.52:6443 check
+    server master03 10.229.111.53:6443 check
+
+frontend machine-config-server
+    bind *:22623
+    default_backend machine-config-server
+    mode tcp
+    option tcplog
+
+backend machine-config-server
+    balance source
+    mode tcp
+    server bootstrap 10.229.111.64:22623 check
+    server master01 10.229.111.51:22623 check
+    server master02 10.229.111.52:22623 check
+    server master03 10.229.111.53:22623 check
+
+frontend ingress-http
+    bind *:80
+    default_backend ingress-http
+    mode tcp
+    option tcplog
+
+backend ingress-http
+    balance source
+    mode tcp
+    server router01 10.229.111.57:80 check
+    server router02 10.229.111.58:80 check
+
+frontend ingress-https
+    bind *:443
+    default_backend ingress-https
+    mode tcp
+    option tcplog
+
+backend ingress-https
+    balance source
+    mode tcp
+    server router01 10.229.111.57:443 check
+    server router02 10.229.111.58:443 check
+```
+
+### 7-3. haproxy 활성화 및 등록
+
+```bash
+systemctl enable haproxy --now
+# 조건 selinux -> disabled
+```
+
+---
+
+# 설치 전 환경 구성
+
+<aside>
+💡 [environment]
+- dns
+- Web Server (apache)
+- ntp(chrony)
+
+</aside>
+
+## 8. 도메인 네임 서버 구축
+
+### 8-1. bind 설치(DNS01, DNS02 공통)
+
+```bash
+yum install bind -y
+```
+
+### 8-2. named.conf 수정(DNS01, DNS02 공통)
+
+아래 수정
+
+```bash
+vi /etc/named.conf
+
+options {
+        listen-on port 53 { 127.0.0.1; };
+        allow-query     { localhost; };
+        listen-on-v6 port 53 { ::1; };
+}
+#기본값
+
+options {
+        listen-on port 53 { any; };
+        allow-query     { any; };
+        listen-on-v6 port 53 { none; };
+}
+#변경값
+
+:wq
+```
+
+### 8-3. named.conf 추가(DNS01, DNS02 공통)
+
+아래 추가
+
+```bash
+vi /etc/named.conf
+
+zone "ocpcsm.hanabank.com." IN {
+        type master;
+        file "ocpcsm.hanabank.com.zone";
+};
+
+zone "111.229.10.in-addr.arpa." IN {
+        type master;
+        file "rev.ocpcsm.hanabank.com.zone";
+};
+
+:wq
+```
+
+### 8-4. ocpcsm.hanabank.com.zone 생성(DNS01)
+
+아래 생성
+
+```bash
+vi /var/named/ocpcsm.hanabank.com.zone
+
+$TTL 1D
+@       IN       SOA @     ns01.ocpcsm.hanabank.com. (
+                        0      ; serial
+                        1D              ; refresh
+                        1H             ; retry
+                        1W              ; expire
+                        3H )            ; minimum
+
+@        IN      NS      ns01.ocpcsm.hanabank.com.
+@        IN      A       10.229.111.32
+
+ns01.ocpcsm.hanabank.com.                 IN      A       10.229.111.32
+ns02.ocpcsm.hanabank.com.                 IN      A       10.229.111.33
+
+dns01.ocpcsm.hanabank.com.                 IN      A       10.229.111.32
+dns02.ocpcsm.hanabank.com.                 IN      A       10.229.111.33
+
+bastion.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+registry.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+api.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+api-int.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+*.apps.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+bootstrap.ocpcsm.hanabank.com.                 IN      A       10.229.111.64
+
+master01.ocpcsm.hanabank.com.                 IN      A       10.229.111.51
+master02.ocpcsm.hanabank.com.                 IN      A       10.229.111.52
+master03.ocpcsm.hanabank.com.                 IN      A       10.229.111.53
+
+worker01.ocpcsm.hanabank.com.                 IN      A       10.229.111.62
+worker02.ocpcsm.hanabank.com.                 IN      A       10.229.111.63
+
+infra01.ocpcsm.hanabank.com.                 IN      A       10.229.111.54
+infra02.ocpcsm.hanabank.com.                 IN      A       10.229.111.55
+infra03.ocpcsm.hanabank.com.                 IN      A       10.229.111.56
+
+router01.ocpcsm.hanabank.com.                 IN      A       10.229.111.57
+router02.ocpcsm.hanabank.com.                 IN      A       10.229.111.58
+
+logging01.ocpcsm.hanabank.com.                 IN      A       10.229.111.59
+logging02.ocpcsm.hanabank.com.                 IN      A       10.229.111.60
+logging03.ocpcsm.hanabank.com.                 IN      A       10.229.111.61
+
+:wq
+```
+
+### 8-5. ocpcsm.hanabank.com.zone 생성(DNS02)
+
+아래 생성
+
+```bash
+vi /var/named/ocpcsm.hanabank.com.zone
+
+$TTL 1D
+@       IN       SOA @     ns02.ocpcsm.hanabank.com. (
+                        0      ; serial
+                        1D              ; refresh
+                        1H             ; retry
+                        1W              ; expire
+                        3H )            ; minimum
+
+@        IN      NS      ns02.ocpcsm.hanabank.com.
+@        IN      A       10.229.111.33
+
+ns01.ocpcsm.hanabank.com.                 IN      A       10.229.111.32
+ns02.ocpcsm.hanabank.com.                 IN      A       10.229.111.33
+
+dns01.ocpcsm.hanabank.com.                 IN      A       10.229.111.32
+dns02.ocpcsm.hanabank.com.                 IN      A       10.229.111.33
+
+bastion.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+registry.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+api.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+api-int.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+*.apps.ocpcsm.hanabank.com.                 IN      A       10.229.111.31
+
+bootstrap.ocpcsm.hanabank.com.                 IN      A       10.229.111.64
+
+master01.ocpcsm.hanabank.com.                 IN      A       10.229.111.51
+master02.ocpcsm.hanabank.com.                 IN      A       10.229.111.52
+master03.ocpcsm.hanabank.com.                 IN      A       10.229.111.53
+
+worker01.ocpcsm.hanabank.com.                 IN      A       10.229.111.62
+worker02.ocpcsm.hanabank.com.                 IN      A       10.229.111.63
+
+infra01.ocpcsm.hanabank.com.                 IN      A       10.229.111.54
+infra02.ocpcsm.hanabank.com.                 IN      A       10.229.111.55
+infra03.ocpcsm.hanabank.com.                 IN      A       10.229.111.56
+
+router01.ocpcsm.hanabank.com.                 IN      A       10.229.111.57
+router02.ocpcsm.hanabank.com.                 IN      A       10.229.111.58
+
+logging01.ocpcsm.hanabank.com.                 IN      A       10.229.111.59
+logging02.ocpcsm.hanabank.com.                 IN      A       10.229.111.60
+logging03.ocpcsm.hanabank.com.                 IN      A       10.229.111.61
+
+:wq
+```
+
+### 8-6. rev.ocpcsm.hanabank.com.zone 생성(DNS01)
+
+아래 생성
+
+```bash
+vi /var/named/rev.ocpcsm.hanabank.com.zone
+
+$TTL 1D
+@       IN      SOA @     ns01.ocpcsm.hanabank.com. (
+                        0      ; serial
+                        1D              ; refresh
+                        1H             ; retry
+                        1W              ; expire
+                        3H )            ; minimum
+@        IN      NS      ns01.ocpcsm.hanabank.com.
+@        IN      A       10.229.111.32
+31.111.229.10.in-addr.arpa.                 IN      PTR       api.ocpcsm.hanabank.com.
+31.111.229.10.in-addr.arpa.                 IN      PTR       api-int.ocpcsm.hanabank.com.
+
+64.111.229.10.in-addr.arpa.                 IN      PTR       bootstrap.ocpcsm.hanabank.com.
+
+51.111.229.10.in-addr.arpa.                 IN      PTR       master01.ocpcsm.hanabank.com.
+52.111.229.10.in-addr.arpa.                 IN      PTR       master02.ocpcsm.hanabank.com.
+53.111.229.10.in-addr.arpa.                 IN      PTR       master03.ocpcsm.hanabank.com.
+
+62.111.229.10.in-addr.arpa.                 IN      PTR       worker01.ocpcsm.hanabank.com.
+63.111.229.10.in-addr.arpa.                 IN      PTR       worker02.ocpcsm.hanabank.com.
+
+54.111.229.10.in-addr.arpa.                 IN      PTR       infra01.ocpcsm.hanabank.com.
+55.111.229.10.in-addr.arpa.                 IN      PTR       infra02.ocpcsm.hanabank.com.
+56.111.229.10.in-addr.arpa.                 IN      PTR       infra03.ocpcsm.hanabank.com.
+
+57.111.229.10.in-addr.arpa.                 IN      PTR       router01.ocpcsm.hanabank.com.
+58.111.229.10.in-addr.arpa.                 IN      PTR       router02.ocpcsm.hanabank.com.
+
+59.111.229.10.in-addr.arpa.                 IN      PTR       logging01.ocpcsm.hanabank.com.
+60.111.229.10.in-addr.arpa.                 IN      PTR       logging02.ocpcsm.hanabank.com.
+61.111.229.10.in-addr.arpa.                 IN      PTR       logging03.ocpcsm.hanabank.com.
+
+:wq
+```
+
+### 8-7. rev.ocpcsm.hanabank.com.zone 생성(DNS02)
+
+아래 생성
+
+```bash
+vi /var/named/rev.ocpcsm.hanabank.com.zone
+
+$TTL 1D
+@       IN      SOA @     ns02.ocpcsm.hanabank.com. (
+                        0      ; serial
+                        1D              ; refresh
+                        1H             ; retry
+                        1W              ; expire
+                        3H )            ; minimum
+@        IN      NS      ns02.ocpcsm.hanabank.com.
+@        IN      A       10.229.111.33
+31.111.229.10.in-addr.arpa.                 IN      PTR       api.ocpcsm.hanabank.com.
+31.111.229.10.in-addr.arpa.                 IN      PTR       api-int.ocpcsm.hanabank.com.
+
+64.111.229.10.in-addr.arpa.                 IN      PTR       bootstrap.ocpcsm.hanabank.com.
+
+51.111.229.10.in-addr.arpa.                 IN      PTR       master01.ocpcsm.hanabank.com.
+52.111.229.10.in-addr.arpa.                 IN      PTR       master02.ocpcsm.hanabank.com.
+53.111.229.10.in-addr.arpa.                 IN      PTR       master03.ocpcsm.hanabank.com.
+
+62.111.229.10.in-addr.arpa.                 IN      PTR       worker01.ocpcsm.hanabank.com.
+63.111.229.10.in-addr.arpa.                 IN      PTR       worker02.ocpcsm.hanabank.com.
+
+54.111.229.10.in-addr.arpa.                 IN      PTR       infra01.ocpcsm.hanabank.com.
+55.111.229.10.in-addr.arpa.                 IN      PTR       infra02.ocpcsm.hanabank.com.
+56.111.229.10.in-addr.arpa.                 IN      PTR       infra03.ocpcsm.hanabank.com.
+
+57.111.229.10.in-addr.arpa.                 IN      PTR       router01.ocpcsm.hanabank.com.
+58.111.229.10.in-addr.arpa.                 IN      PTR       router02.ocpcsm.hanabank.com.
+
+59.111.229.10.in-addr.arpa.                 IN      PTR       logging01.ocpcsm.hanabank.com.
+60.111.229.10.in-addr.arpa.                 IN      PTR       logging02.ocpcsm.hanabank.com.
+61.111.229.10.in-addr.arpa.                 IN      PTR       logging03.ocpcsm.hanabank.com.
+
+:wq
+```
+
+### 8-8. DNS 자기 자신으로 변경(DNS01, DNS02 공통)
+
+```bash
+nmcli con mod ens192 ipv4.dns 10.229.111.32,10.229.111.33 ipv4.method manual connection.autoconnect yes
+# DNS server 자기 자신으로 변경(이중화이므로 두개)
+nmcli con down ens192 ; nmcli con up ens192
+# ens192 포트 재시작
+cat /etc/resolv.conf
+# nameserver 확인
+```
+
+### 8-9. DNS 소유권 수정(DNS01, DNS02 공통)
+
+```bash
+chown root:named ocpcsm.hanabank.com.zone
+chown root:named rev.ocpcsm.hanabank.com.zone
+```
+
+### 8-10. DNS 활성화 및 등록(DNS01, DNS02 공통)
+
+```bash
+systemctl enable named --now
+```
+
+### 8-11. 도메인 조회
+
+```bash
+yum install bind-utils -y
+# 도메인 쿼리 명령어 설치
+dig +short ns01.ocpcsm.hanabank.com
+dig +short ns02.ocpcsm.hanabank.com
+dig +short api.ocpcsm.hanabank.com
+dig +short *.apps.ocpcsm.hanabank.com
+dig +short dns01.ocpcsm.hanabank.com
+dig +short dns02.ocpcsm.hanabank.com
+dig +short bastion.ocpcsm.hanabank.com
+# 정방향 조회
+```
+
+## 9. 웹 서버 구축
+
+### 9-1. apache httpd 서버설치
+
+```bash
+yum install httpd -y
+```
+
+### 9-2. httpd.conf  수정
+
+아래 수정
+
+```bash
+vi /etc/httpd/conf/httpd.conf
+
+Listen 80 -> #Listen 80
+Listen 8080 # 추가
+# firewalld stop & disable 필수
+```
+
+### 9-3. OCP 디렉터리 생성
+
+```bash
+mkdir -p /var/www/html/ocp
+chmod 777 /var/www/html/ocp
+```
+
+### 9-4. 아파치 httpd 서버 활성화 및 등록
+
+```bash
+systemctl enable httpd --now
+curl http://bastion.ocpcsm.hanabank.com:8080/
+# 경로 확인
+...
+			<a href="https://nginx.com">NGINX&trade;</a> is a registered trademark of <a href="https://www.f5.com">F5 Networks, Inc.</a>.
+	        </div>
+	</body>
+</html>
+# 출력값(정상)
+
+```
+
+## 10. ntp 서버 구축
+
+### 10-1. chrony 설치
+
+```bash
+yum install chrony -y
+```
+
+### 10-2. ****chrony.conf**** 수정
+
+```bash
+vi /etc/chrony.conf
+
+#pool 2.rhel.pool.ntp.org iburst -> pool 2.rhel.pool.ntp.org iburst 주석 처리
+server 10.229.111.30 iburst
+# 동기화되어 있는 ntp 서버 설정
+
+allow 10.229.111.0/24
+# DP_hana 대역대 IP allow 설정
+
+:wq
+```
+
+### 10-3. chronyd 활성화 및 등록
+
+```bash
+systemctl enable chronyd --now
+```
+
+### 10-4. chronyd 동기화 확인
+
+```bash
+---
+[root@bastion ~]# chronyc sources
+MS Name/IP address         Stratum Poll Reach LastRx Last sample               
+===============================================================================
+^- 203.248.240.140               2   6    17     6    +95ms[  +95ms] +/-  137ms
+^* 220.73.142.66                 2   6    17     7    +29us[ +195us] +/- 3309us
+---
+# 출력값
+```
+
+![Untitled](HANA%20-%20Opsnshift%204%2011%2018%20UPI%20installation%20on%20VMwar%209740a8dce8f44cc0b98c8c1643f5951a/Untitled%2018.png)
+
+---
+
+# 설치 진행
+
+## 11. UPI OCP 설치 전 진행 사항
+
+### 11-1. OCP 설치 이미지 레지스트리 인증서 경로 확인
+
+```bash
+cat /quay/quay-config/ssl.cert
+```
+
+### 11-2. install-config.yaml 파일 작성(스냅샷)
+
+```bash
+cd /var/www/html/
+# 백업 yaml 파일 작성할 디렉터리로 이동
+ssh-keygen
+# install-config.yaml 파일 작성 위해 ssh키 생성
+vi install-config.yaml.bak
+# 백업 yaml 파일 작성
+
+apiVersion: v1
+baseDomain: hanabank.com
+compute:
+- hyperthreading: Enabled
+  name: worker
+  replicas: 0
+controlPlane:
+  hyperthreading: Enabled
+  name: master
+  replicas: 3
+metadata:
+  name: ocpcsm
+networking:
+  clusterNetworks:
+  - cidr: 10.230.0.0/17
+    hostPrefix: 23
+  networkType: OpenShiftSDN
+  serviceNetwork:
+  - 10.230.128.0/17
+platform:
+  none: {}
+fips: false
+pullSecret: '{"auths":{"registry.ocpcsm.hanabank.com:8443":{"auth":"YWRtaW46YWRtaW4xMjM="}}}'
+sshKey: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDSpLgpd4hamqbJm9p4DEBFSam9nqdqrRbwiyHneN3DyK1Gv7nFC+PhbrHPJ2P64Q5zWpt6zRFtfOejpID5vebvSMqPfm65VuKCeZtw/4rHml2TFcBCq6kKDYf0xah5c320CyWrd+JEDQJ7m4emc1Ij+6TJBFCMhDZndSFVReheCxrA4iOBAmW8x5nIAbFRLe9vFYEa46hQ9fcgiJqdFGHVReL0QVmSHRBDbbPKt9pbBZbJygNQgoyhrjFNUhnwilzqHM+Pskn/jwHtMdbag3myDlNreQ35PdwOHcZgVnE9TVmE7DYQo4ICw0k+pZMRyqhH/Xhs+TACzS+QaZTpQeD93XoEEmPWl4KB8WD767nSxedifFScEfVueCIfHAFKp1dUhZ1vXcZRzhIhr4UKCYPVnnfzsbZuQtnSKtkn2sbKdu7ppF7EBqkX7CuU9Z7mB8cAJYWnkGkERjWO75kSI7O7ISzLssfYmPzjuhGzThOAalj3NvpjYHUZA/qMK4DcpcE= root@bastion.ocpcsm.hanabank.com'
+additionalTrustBundle: |
+  -----BEGIN CERTIFICATE-----
+  MIIDazCCAlOgAwIBAgIUNr1jggYY9JdngPSzoD/k46qbmL0wDQYJKoZIhvcNAQEL
+  BQAwdjELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAlZBMREwDwYDVQQHDAhOZXcgWW9y
+  azENMAsGA1UECgwEUXVheTERMA8GA1UECwwIRGl2aXNpb24xJTAjBgNVBAMMHHJl
+  Z2lzdHJ5Lm9jcGNzbS5oYW5hYmFuay5jb20wHhcNMjMwMTE2MDE1ODA4WhcNMjQw
+  MTA3MDE1ODA4WjAaMRgwFgYDVQQDDA9xdWF5LWVudGVycHJpc2UwggEiMA0GCSqG
+  SIb3DQEBAQUAA4IBDwAwggEKAoIBAQC8xogTO7ow4LvK6elHHsTkn3dLIK/OLard
+  BVeXmrscUzNGXdJqtxidBNVYndfh14Am7mR57RkGuq7OIR63WaNsnHMcUQpy8a/x
+  kny5oX38wbS5X4GJKH2tvOZKLcXBkp5a9kDd45GyNLN4gQsP2VH+r7vTOXIJWht0
+  sigBN8e+FW8Sob9VaPxD5Q92P085NuE7DvRX+4nTT/0bFXplNP+2wHpjyvYl7wa6
+  qKzFoMkzPqldaQj4EQ06JJG4ubvME2fU4VoncIEH/OVh5lgq1WWhJoCaIyI1WdSD
+  78dIWj34sPOPA4/JfLPAfc+H34lobpJ95y64/M2YNFkT4yxp0zvHAgMBAAGjTTBL
+  MAsGA1UdDwQEAwIC5DATBgNVHSUEDDAKBggrBgEFBQcDATAnBgNVHREEIDAeghxy
+  ZWdpc3RyeS5vY3Bjc20uaGFuYWJhbmsuY29tMA0GCSqGSIb3DQEBCwUAA4IBAQAt
+  U+Rs7asVNH5Yah+xo2uB7QmgpKcAc407qy5VrSAWdDzwUcWaTeJ943huhnRLLbQ6
+  Slujkywtdy6HhA8QUS1ap6RbHQEJla2H5L4NnCtcJVGb2YcGdDyCmaehpqqr7aU9
+  3Z8GT862/Dt+cixz8uVBFmW+ccaiMu+oW2Nr/xI1ma/sPZqKt8iizGi9coHuDhKK
+  KE3TKMgdeZcGA8bKtYUCm219Ul7xnxIVqwZpIsaNJgzCi0AEQtnu5PltMhQ1DeZe
+  R5m7Ml4hnfJQdoBdAh9+VzT0WQNr0OkhePzHBhRGjPhUnotdOJdCMFLKVRNJ9XA7
+  dzasDnaBQJbnivmS82dP
+  -----END CERTIFICATE-----
+  -----BEGIN CERTIFICATE-----
+  MIID2zCCAsOgAwIBAgIUOhSm6yFCv8L5JQ8ALVUyXYterAQwDQYJKoZIhvcNAQEL
+  BQAwdjELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAlZBMREwDwYDVQQHDAhOZXcgWW9y
+  azENMAsGA1UECgwEUXVheTERMA8GA1UECwwIRGl2aXNpb24xJTAjBgNVBAMMHHJl
+  Z2lzdHJ5Lm9jcGNzbS5oYW5hYmFuay5jb20wHhcNMjMwMTE2MDE1ODA2WhcNMjUx
+  MTA1MDE1ODA2WjB2MQswCQYDVQQGEwJVUzELMAkGA1UECAwCVkExETAPBgNVBAcM
+  CE5ldyBZb3JrMQ0wCwYDVQQKDARRdWF5MREwDwYDVQQLDAhEaXZpc2lvbjElMCMG
+  A1UEAwwccmVnaXN0cnkub2NwY3NtLmhhbmFiYW5rLmNvbTCCASIwDQYJKoZIhvcN
+  AQEBBQADggEPADCCAQoCggEBAK92WAetBT103CowThMyePAAir+gyV1da/xflkZG
+  EIDFIXg/ly6mrocWoJT5jMNSPNFkD7qhVMPgPQBOEduaZFI9I4Yq7OdpFCfjPqh6
+  SqPTl+Z3+6p6nTGYKmDsJdiV57HDbw7KA8nZOcz9qhBG0qelDGyYpXLawhsh0dYv
+  osKa4jVqKxJVbTx2qFbL7mYFiGRSwomBuxVmfrQUaDm/0P/rN/lQY3tbLv+OFffA
+  Dv6bvlIri5xA9ZhYa2otWmQAnUJMVcCEu1BFbKMiybY/SgVfqtUAHPlt10EC/xPk
+  cHgp7Prbz1RlXRpIGUbVBsHZeoFtaL+vytJt7L9YLshHtysCAwEAAaNhMF8wCwYD
+  VR0PBAQDAgLkMBMGA1UdJQQMMAoGCCsGAQUFBwMBMCcGA1UdEQQgMB6CHHJlZ2lz
+  dHJ5Lm9jcGNzbS5oYW5hYmFuay5jb20wEgYDVR0TAQH/BAgwBgEB/wIBATANBgkq
+  hkiG9w0BAQsFAAOCAQEAD/fd2J5bxAYf3IkoQfySMCn73R2UWtOIxOoOLNBd69Fb
+  PZTpvHnpBcVmGQ8/SuBIeyW1ni0SgvaLNSy0t3rGLSIYgqzAfE4j3nRIP1LlClux
+  jjpxV/xBlZBaffFsdj5xaYvIic8mwZqMPw6gsYcra4vlI2vhV5lw7XJ/kXHDZr8+
+  Cb+ts+eZFx+n3dA+ig07bDAninD7Z+uZRBccGPEmkPFlP/JQatWKW8b1RTV7Wf1+
+  ZVc7r5t+9ZpOeZmCmgkQi/2sqg/uXJGFG6cDTI1+4W+pnOOvG2NC+pxwWPSSeTUw
+  iYtYCcmCkb2iEvK9/mlRUKW/iH65JNnUXsUo5F3XTA==
+  -----END CERTIFICATE-----
+imageContentSources:
+  - mirrors:
+    - registry.ocpcsm.hanabank.com:8443/4.11/openshift/release
+    source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+  - mirrors:
+    - registry.ocpcsm.hanabank.com:8443/4.11/openshift/release-images
+    source: quay.io/openshift-release-dev/ocp-release
+
+## 설명
+controlPlane:
+  hyperthreading: Enabled
+  name: master
+  replicas: 3 -> 배포되는 마스터 노드 갯수 설정
+# 수정 부분
+pullSecret: -> 위 참고하여 수정
+sshKey: -> # cat /root/.ssh/id_rsa.pub
+-----BEGIN CERTIFICATE----- ~ -----END CERTIFICATE----- -> # cat /quay/quay-config/ssl.cert
+imageContentSources: -> #/quy/mirror/oc-mirror-workspace/results-1673938801/imageContentSourcePolicy.yaml(설치 이미지 레지스트리 로드 성공시 생성)
+```
+
+### 11-3. 이그니션 파일 생성
+
+```bash
+cp install-config.yaml.bak /var/www/html/ocp/install-config.yaml
+# 매니페스트 생성시 install-config.yaml이 삭제되므로 백업을 위함
+openshift-install create manifests --dir=/var/www/html/ocp
+# 매니페스트 생성
+# 매니페스트 생성 순간 24시간동안 유효하다. /var/www/html/ocp 디렉터리 밑에 숨김 파일 존재하므로 삭제하거나 ocp 디렉터리를 삭제(재생성이 필요할 때)
+cd /var/www/html/ocp/manifests/
+# cluster-scheduler-02-config -> mastersSchedulable true -> false로 치환
+vi cluster-scheduler-02-config.yml
+# mastersSchedulable: true -> mastersSchedulable: false
+# 또는
+sed -i 's/mastersSchedulable: true/mastersSchedulable: false/g' cluster-scheduler-02-config.yml
+로 치환
+openshift-install create ignition-configs --dir=/var/www/html/ocp/
+# 이그니션 샘플 파일 생성
+```
+
+### 11-4. 이그니션 파일 수정
+
+이그니션 파일 경로로 이동
+
+```bash
+cd /var/www/html/ocp/
+```
+
+boostrap 이그니션 파일 수정
+
+```bash
+cat bootstrap.ign | jq . > b.ign
+
+vi b.ign
+
+  "storage": {
+    "files": [
+# 추가
+      {
+        "overwrite": true,
+        "path": "/etc/hostname",
+        "user": {
+          "name": "root"
+        },
+        "contents": {
+          "source": "data:,bootstrap.ocpcsm.hanabank.com"
+        },
+        "mode": 420
+      },
+# 추가
+      { 
+        "overwrite": true,
+        "path": "/etc/containers/registries.conf",
+        "user": {
+          "name": "root"
+```
+
+master 이그니션 파일 수정
+
+```bash
+cat master.ign | jq . > m1.ign
+
+vi m1.ign
+
+"version": "3.2.0"
+  },-> # 추가
+  "storage": {
+    "files": [
+      {
+        "overwrite": true,
+        "path": "/etc/hostname",
+        "user": {
+          "name": "root"
+        },
+        "contents": {
+          "source": "data:,master01.ocpcsm.hanabank.com"
+        },
+        "mode": 384
+      }
+    ]
+  }
+# 추가
+}
+
+cp m1.ign m2.ign
+cp m2.ign m3.ign
+```
+
+router 이그니션 파일 수정
+
+```bash
+cat worker.ign | jq . > r1.ign
+
+vi r1.ign
+
+"version": "3.2.0"
+  },> # 추가
+  "storage": {
+    "files": [
+      {
+        "overwrite": true,
+        "path": "/etc/hostname",
+        "user": {
+          "name": "root"
+        },
+        "contents": {
+          "source": "data:,router01.ocpcsm.hanabank.com"
+        },
+        "mode": 384
+      }
+    ]
+  }
+# 추가
+}
+
+cp r1.ign r2.ign
+```
+
+worker 이그니션 파일 수정
+
+```bash
+cat worker.ign | jq . > w1.ign
+
+vi w1.ign
+
+"version": "3.2.0"
+  },> # 추가
+  "storage": {
+    "files": [
+      {
+        "overwrite": true,
+        "path": "/etc/hostname",
+        "user": {
+          "name": "root"
+        },
+        "contents": {
+          "source": "data:,worker01.ocpcsm.hanabank.com"
+        },
+        "mode": 384
+      }
+    ]
+  }
+# 추가
+}
+
+cp w1.ign w2.ign
+```
+
+이그니션 파일 권한 수정
+
+```bash
+chmod 777 /var/www/html/ocp/*.ign
+```
+
+## 12. CoreOS node 설치
+
+### 12-1. bootstrap 설치
+
+bootstrap VM CoreOS 부팅 → IP 및 호스트네임 기본 설정 후
+
+```bash
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.64/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 bootstrap.ocpcsm.hanabank.com(DNS에서 가져옴)
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/b.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+```
+
+bastion 노드에서 bootstraping 진행 확인
+
+```bash
+openshift-install wait-for bootstrap-complete --dir=/var/www/html/ocp --log-level debug
+# 로그 확인
+DEBUG OpenShift Installer 4.11.18                  
+DEBUG Built from commit 050fa95f79d92161df16578870ecd2764ab7a38e 
+INFO Waiting up to 20m0s (until 5:05PM) for the Kubernetes API at https://api.ocpcsm.hanabank.com:6443... 
+INFO API v1.24.6+5658434 up                       
+DEBUG Loading Install Config...                    
+DEBUG   Loading SSH Key...                         
+DEBUG   Loading Base Domain...                     
+DEBUG     Loading Platform...                      
+DEBUG   Loading Cluster Name...                    
+DEBUG     Loading Base Domain...                   
+DEBUG     Loading Platform...                      
+DEBUG   Loading Networking...                      
+DEBUG     Loading Platform...                      
+DEBUG   Loading Pull Secret...                     
+DEBUG   Loading Platform...                        
+DEBUG Using Install Config loaded from state file  
+INFO Waiting up to 30m0s (until 5:15PM) for bootstrapping to complete...
+# 출력 후 마스터 노드 배포 시작
+```
+
+### 12-2. master node 설치
+
+master node VM CoreOS 부팅 → IP 및 호스트네임 기본 설정 후
+
+```bash
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.51/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 master01.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/m1.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.52/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 master02.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/m2.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.53/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 master03.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/m3.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+```
+
+bastion 노드에서 master node 설치 진행 확인 → 마스터 노드 3대(변경 불가) 배포(Ready) 후 worker node 배포
+
+```bash
+export KUBECONFIG=/var/www/html/ocp/auth/kubeconfig
+# 명령어 등록(env 확인하기)
+||
+cp /var/www/html/ocp/auth/kubeconfig ~/.kube/config
+# 명령어 등록(영구 등록)
+oc get node
+# 설치된 node 확인
+NAME                           STATUS   ROLES    AGE    VERSION
+master01.ocpcsm.hanabank.com   Ready    master   12m   v1.24.6+5658434
+master02.ocpcsm.hanabank.com   Ready    master   11m   v1.24.6+5658434
+master03.ocpcsm.hanabank.com   Ready    master   10m   v1.24.6+5658434
+# 출력값(STATUS -> Ready)
+```
+
+### 12-3. router node 설치
+
+router node VM CoreOS 부팅 → IP 및 호스트네임 기본 설정 후
+
+```bash
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.57/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 router01.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/r1.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.58/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 router02.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/r2.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+```
+
+### 12-4. worker node 설치
+
+worker node VM CoreOS 부팅 → IP 및 호스트네임 기본 설정 후
+
+```bash
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.62/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 worker01.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/w1.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+
+nmtui
+Profile Name -> ens192
+Addresses 10.229.111.63/24
+Gateway 10.229.111.1
+DNS Servers 10.229.111.32
+10.229.111.33
+-> 포트 재시작
+bash
+# hostname 확인 worker02.ocpcsm.hanabank.com
+sudo coreos-installer install /dev/sda -I http://10.229.111.31:8080/ocp/w2.ign --insecure-ignition -n
+# Install complete. 확인 후
+reboot
+```
+
+csr(certificate signing request) 승인(worker 노드는 csr 승인 후 노드 join)
+
+```bash
+oc get csr
+# csr 확인
+# CONDITION -> Pending
+oc adm certificate approve csr-h4kcs
+# Pending 상태 승인
+||
+oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs oc adm certificate approve
+```
+
+---
+
+# 설치 확인
+
+## 13. 상태 확인
+
+### 13-1. 노드 상태 확인
+
+```bash
+NAME                           STATUS   ROLES    AGE    VERSION
+master01.ocpcsm.hanabank.com   Ready    master   31m   v1.24.6+5658434
+master02.ocpcsm.hanabank.com   Ready    master   30m   v1.24.6+5658434
+master03.ocpcsm.hanabank.com   Ready    master   28m   v1.24.6+5658434
+router01.ocpcsm.hanabank.com   Ready    worker   12m   v1.24.6+5658434
+router02.ocpcsm.hanabank.com   Ready    worker   11m   v1.24.6+5658434
+worker01.ocpcsm.hanabank.com   Ready    worker   7m   v1.24.6+5658434
+worker02.ocpcsm.hanabank.com   Ready    worker   8m   v1.24.6+5658434
+```
+
+### 13-2. cluseteroperator 확인(스냅샷)
+
+전 oc AVAILABLE → True / PROGRESSING → False
+
+```bash
+NAME                                       VERSION   AVAILABLE   PROGRESSING   DEGRADED   SINCE   MESSAGE
+authentication                             4.11.18   True        False         False      101m    
+baremetal                                  4.11.18   True        False         False      125m    
+cloud-controller-manager                   4.11.18   True        False         False      130m    
+cloud-credential                           4.11.18   True        False         False      141m    
+cluster-autoscaler                         4.11.18   True        False         False      125m    
+config-operator                            4.11.18   True        False         False      128m    
+console                                    4.11.18   True        False         False      106m    
+csi-snapshot-controller                    4.11.18   True        False         False      113m    
+dns                                        4.11.18   True        False         False      125m    
+etcd                                       4.11.18   True        False         False      125m    
+image-registry                             4.11.18   True        False         False      119m    
+ingress                                    4.11.18   True        False         False      108m    
+insights                                   4.11.18   True        False         False      53s     
+kube-apiserver                             4.11.18   True        False         False      123m    
+kube-controller-manager                    4.11.18   True        False         False      122m    
+kube-scheduler                             4.11.18   True        False         False      123m    
+kube-storage-version-migrator              4.11.18   True        False         False      127m    
+machine-api                                4.11.18   True        False         False      125m    
+machine-approver                           4.11.18   True        False         False      125m    
+machine-config                             4.11.18   True        False         False      124m    
+marketplace                                4.11.18   True        False         False      125m    
+monitoring                                 4.11.18   True        False         False      103m    
+network                                    4.11.18   True        False         False      124m    
+node-tuning                                4.11.18   True        False         False      125m    
+openshift-apiserver                        4.11.18   True        False         False      112m    
+openshift-controller-manager               4.11.18   True        False         False      123m    
+openshift-samples                          4.11.18   True        False         False      109m    
+operator-lifecycle-manager                 4.11.18   True        False         False      126m    
+operator-lifecycle-manager-catalog         4.11.18   True        False         False      126m    
+operator-lifecycle-manager-packageserver   4.11.18   True        False         False      113m    
+service-ca                                 4.11.18   True        False         False      127m    
+storage                                    4.11.18   True        False         False      128m    
+```
+
+## 14. 접속 확인
+
+### 14-1. 접속 URL 확인
+
+hosts에 등록할 도메인 확인
+
+```bash
+oc get route -A
+# 모든 노드 나열
+NAMESPACE                  NAME                      HOST/PORT                                                               PATH        SERVICES            PORT    TERMINATION            WILDCARD
+openshift-authentication   oauth-openshift           oauth-openshift.apps.ocpcsm.hanabank.com                                            oauth-openshift     6443    passthrough/Redirect   None
+openshift-console          console                   console-openshift-console.apps.ocpcsm.hanabank.com                                  console             https   reencrypt/Redirect     None
+# hosts에 등록할 항목 확인 oauth -> ocp 계정 인증 관련, console -> 웹콘솔 도메인
+```
+
+### 14-2. hosts 등록
+
+윈도우 →C:\Windows\System32\drivers\etc\hosts / 리눅스 → /etc/hosts
+
+```bash
+10.229.111.31 oauth-openshift.apps.ocpcsm.hanabank.com
+10.229.111.31 console-openshift-console.apps.ocpcsm.hanabank.com
+```
+
+### 14-3. Web Console 접속
+
+웹 브라우저
+
+```bash
+https://console-openshift-console.apps.ocpcsm.hanabank.com
+```
+
+기본 ID / PW 확인
+
+```bash
+사용자 이름 : kubeadmin (default)
+암호 : [cat /var/www/html/ocp/auth/kubeadmin-password에서 확인 가능]
+```
